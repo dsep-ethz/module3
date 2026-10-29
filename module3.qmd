@@ -36,12 +36,13 @@ library(sf)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
-library(DBI)
-library(duckdb)
 library(rnaturalearth)
 library(prioritizr)
 
 dir.create("cache", showWarnings = FALSE)
+
+# Remote reads should fail or retry rather than hang if the network stalls
+setGDALconfig(c("GDAL_HTTP_TIMEOUT=60", "GDAL_HTTP_MAX_RETRY=3", "GDAL_HTTP_RETRY_DELAY=2"))
 ```
 
 The layers:
@@ -50,7 +51,7 @@ The layers:
 |---|---|---|
 | `richness` | Combined IUCN species richness, 10 km, World Mollweide | local file in `data/` |
 | `carbon` | Irrecoverable carbon (Noon et al. 2022) | cloud-optimised GeoTIFF, lon/lat |
-| `ncp` | Number of nature's contributions to people a place ranks highly for, 0-19 (Chaplin-Kramer et al. 2019) | H3 hex parquet |
+| `ncp` | Number of nature's contributions to people a place ranks highly for, 0-19 (Chaplin-Kramer et al. 2019) | cloud-optimised GeoTIFF, lon/lat |
 
 Population (GHS-POP 2020) is a fourth layer you pull yourself at the end. The last three layers are cloud-native files on [Source Cooperative](https://source.coop/cboettig): no account or key, just a lazy connection and a window read, like Module 1's satellite imagery.
 
@@ -116,7 +117,7 @@ plot(richness, main = "Combined species richness")
 ## 3. Carbon: window-read a cloud-optimised GeoTIFF
 
 ::: {.callout-note title="Your task"}
-The COG is at the URL below (prefix `/vsicurl/` to open it lazily). Open it, crop it to Europe's window, then get it onto the richness grid so the two stack.
+The COG is at `https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/cboettig/carbon/v2/cogs/irrecoverable_c_total_2024.tif` (put `/vsicurl/` in front of the URL to open it lazily). The same file is also served at `https://data.source.coop/cboettig/carbon/v2/cogs/irrecoverable_c_total_2024.tif`; if one address is slow or stalls, try the other. Open it, crop it to Europe's window, then get it onto the richness grid so the two stack.
 
 *Hints:*
 
@@ -129,9 +130,7 @@ The COG is at the URL below (prefix `/vsicurl/` to open it lazily). Open it, cro
 ```{r}
 #| label: carbon-task
 #| eval: false
-src <- "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/cboettig/"
-carbon_path <- paste0("/vsicurl/", src, "carbon/v2/cogs/irrecoverable_c_total_2024.tif")
-carbon_cog <- rast(carbon_path, opts = "OVERVIEW_LEVEL=1")
+carbon_cog <- rast("___", opts = "OVERVIEW_LEVEL=1")
 
 carbon_window <- crop(___, ext(___))
 carbon <- project(___, ___, method = ___)
@@ -141,9 +140,11 @@ names(carbon) <- "carbon"
 ::: {.callout-note title="Solution" collapse="true"}
 ```{r}
 #| label: carbon-solution
-src <- "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/cboettig/"
-carbon_path <- paste0("/vsicurl/", src, "carbon/v2/cogs/irrecoverable_c_total_2024.tif")
-carbon_cog <- rast(carbon_path, opts = "OVERVIEW_LEVEL=1")
+# Source Cooperative serves the same file at two addresses; use whichever is faster for you
+carbon_cog <- rast("/vsicurl/https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/cboettig/carbon/v2/cogs/irrecoverable_c_total_2024.tif",
+                   opts = "OVERVIEW_LEVEL=1")
+# carbon_cog <- rast("/vsicurl/https://data.source.coop/cboettig/carbon/v2/cogs/irrecoverable_c_total_2024.tif",
+#                    opts = "OVERVIEW_LEVEL=1")
 
 carbon_window <- crop(carbon_cog, ext(bbox[c("xmin", "xmax", "ymin", "ymax")]))
 carbon <- project(carbon_window, richness, method = "average")
@@ -154,57 +155,25 @@ plot(carbon)
 The overview pixels are about 1 km and our cells are 10 km, so we are *aggregating*, not interpolating. `method = "bilinear"` reads only the four pixels nearest each cell centre, so a cell becomes `NA` if that one spot is a lake or a town. `"average"` uses every pixel in the cell and ignores `NA`s.
 :::
 
-## 4. NCP: filter a hex table before downloading
+## 4. NCP: the same recipe
 
-NCP is a table of H3 hexagon IDs, finer than our grid, so there is no raster to crop. DuckDB's `h3` extension turns a hex ID into a lat/lng, so the bounding box can go in the SQL `WHERE` and only rows inside it are transferred. The files are split by the biggest H3 cells (res 0), so `hex_pull()` first lists which partitions exist and keeps those that cover Europe, rather than scanning the whole globe. We then make points and `rasterize()` onto the `richness` grid. This part is given, and you are not expected to memorise the syntax.
+NCP comes as a cloud-optimised GeoTIFF too, in the same Source Cooperative folder (`ncp/NCP_only_4326_cog.tif`, a score from 0 to 19 in lon/lat, about 2 km pixels). It is small enough that we do not need an overview. This is the carbon recipe again, so it is given: open lazily, crop, then `project()` onto the richness grid.
 
 ```{r}
-#| label: hex-pull
-con <- dbConnect(duckdb())
-invisible(dbExecute(con, "INSTALL httpfs; LOAD httpfs;"))
-invisible(dbExecute(con, "INSTALL h3 FROM community; LOAD h3;"))
-invisible(dbExecute(con, "SET s3_region = 'us-west-2'; SET s3_endpoint = 's3.us-west-2.amazonaws.com';"))
+#| label: ncp
+ncp_cog <- rast("/vsicurl/https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/cboettig/ncp/NCP_only_4326_cog.tif")
+# ncp_cog <- rast("/vsicurl/https://data.source.coop/cboettig/ncp/NCP_only_4326_cog.tif")
 
-s3 <- "s3://us-west-2.opendata.source.coop/cboettig/"
-
-# Res-0 H3 cells that overlap Europe's window
-h0_cells <- dbGetQuery(con, "
-  SELECT DISTINCT CAST(h3_latlng_to_cell(lat, lng, 0) AS VARCHAR) AS h0
-  FROM (SELECT unnest(generate_series(33, 73, 1)) AS lat),
-       (SELECT unnest(generate_series(-26, 46, 1)) AS lng)")$h0
-
-# Aggregate to res-7 hexes (about 5 km2) inside DuckDB, keep those in the window
-hex_pull <- function(path, hex_col, value_col, fun) {
-  have <- dbGetQuery(con, paste0("SELECT file FROM glob('", s3, path, "h0=*/data_0.parquet')"))$file
-  files <- have[sub(".*h0=([0-9]+)/.*", "\\1", have) %in% h0_cells]
-  dbGetQuery(con, paste0("
-    SELECT h3_cell_to_lng(h) AS lng, h3_cell_to_lat(h) AS lat, value
-    FROM (SELECT h3_cell_to_parent(", hex_col, ", 7) AS h, ", fun, "(", value_col, ") AS value
-          FROM read_parquet([", paste0("'", files, "'", collapse = ", "), "])
-          GROUP BY h)
-    WHERE h3_cell_to_lat(h) BETWEEN ", bbox["ymin"], " AND ", bbox["ymax"], "
-      AND h3_cell_to_lng(h) BETWEEN ", bbox["xmin"], " AND ", bbox["xmax"]))
-}
-
-to_grid <- function(df, fun) {
-  vect(df, geom = c("lng", "lat"), crs = "EPSG:4326") |>
-    project(richness) |>
-    rasterize(richness, field = "value", fun = fun)
-}
-
-ncp <- to_grid(hex_pull("ncp/hex/ncp_only/", "h7", "ncp_only", "AVG"), "mean")
+ncp_window <- crop(ncp_cog, ext(bbox[c("xmin", "xmax", "ymin", "ymax")]))
+ncp <- project(ncp_window, richness, method = "average")
 names(ncp) <- "ncp"
+plot(ncp)
 ```
 
-::: {.callout-note title="Your task: interrogate the code"}
-Syntax like this (SQL against remote files, H3 cells, reprojecting points) is exactly what an AI coding assistant, including a local one, is good at. Use one. Paste in the chunk above and ask it to explain each step, then check its answers against the data:
-
-1. Why is the bounding-box filter inside the SQL rather than after `dbGetQuery()`? Why list the partitions first?
-2. Why `mean` for NCP? What would `sum` do to the map?
-3. How many source hexagons fall in each 10 km cell? Count them with `rasterize(..., fun = "count")`. Is the average based on enough points?
-4. What does a cell with no hexagons become, and is "0" the right value for it?
-
-An assistant can still be confidently wrong, so verify what it tells you.
+::: {.callout-note title="Questions"}
+1. Why `"average"` again? What would `"sum"` do to a *score*, and why would that be wrong here (and right for something like a head count)?
+2. Where are the holes in the map? Check how many land cells are `NA` and which countries they are in. Is "no data" the same thing as "no NCP"?
+3. We are about to turn missing values into 0. What does that assume about NCP in those cells, and who could be affected?
 :::
 
 ## 5. Stack, then clip to the *countries*
@@ -428,24 +397,37 @@ summary_table |> mutate(across(-plan, ~ round(.x, 2)))
 
 We left people out of the objective on purpose: we protected for nature first, and now we count who ends up inside. Population is the fourth layer.
 
+Population (GHS-POP 2020, JRC) is a global COG at about 90 m: `population/raw/ghs-pop-2020-cog.tif` in the same Source Cooperative folder. It is 11.6 GB, so the lazy, windowed read matters even more than it did for carbon.
+
 ::: {.callout-note title="Your task"}
-Pull GHS-POP 2020 (JRC) from `population/ghs-pop-2020/hex/` and put it on `grid`. Then, for each of the four plans, work out how many people live inside the protected cells.
+Read population for Europe, put it on `grid`, and work out how many people live inside the protected cells of each of the four plans.
 
 *Hints:*
 
-- `hex_pull()` and `to_grid()` already do almost everything. The population table is at H3 resolution 9 (column `h9`, value column `population`), so the hexes are far finer than a cell. Should you average them or add them up?
+- It is the carbon recipe again: open lazily, crop, `project()` onto the richness grid. Use an overview (`OVERVIEW_LEVEL=3` is 16 times coarser, about 1.5 km) so you do not read all 90 m pixels.
+- Population is a **count**, not a score. Which `method` adds people up as cells get bigger?
+- **A trap:** each overview pixel holds the *average* of the pixels it covers, not their total. Summing overview pixels therefore undercounts people by the number of pixels averaged (here 16 x 16). Check your answer: the countries in `grid` hold about 570 million people.
 - Keep population in **thousands** of people so the numbers stay readable.
 - Missing population is 0 on land and `NA` outside, exactly as before. Re-use `fill0()` and `mask()`.
-- It is a bigger pull than NCP (about 20 seconds). Use an assistant if the SQL is unfamiliar.
 :::
 
 ::: {.callout-note title="Solution" collapse="true"}
 ```{r}
 #| label: population-solution
-population <- to_grid(hex_pull("population/ghs-pop-2020/hex/", "h9", "population", "SUM"), "sum") / 1000
+pop_cog <- rast("/vsicurl/https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/cboettig/population/raw/ghs-pop-2020-cog.tif",
+                opts = "OVERVIEW_LEVEL=3")
+# pop_cog <- rast("/vsicurl/https://data.source.coop/cboettig/population/raw/ghs-pop-2020-cog.tif",
+#                 opts = "OVERVIEW_LEVEL=3")
+pop_window <- crop(pop_cog, ext(bbox[c("xmin", "xmax", "ymin", "ymax")]))
+
+# Sum people into cells; overview pixels are averages of 16 x 16 pixels, so scale back up (and to thousands)
+population <- project(pop_window, richness, method = "sum") * 16^2 / 1000
 names(population) <- "population"
 
 grid <- c(grid[[c("richness", "carbon", "ncp")]], mask(fill0(population), grid[["richness"]]))
+
+# Total population on the grid, in millions (should be about 570)
+global(grid[["population"]], "sum", na.rm = TRUE)[[1]] / 1000
 
 # Millions of people inside each plan
 sapply(plans, \(sol) global(sol * grid[["population"]], "sum", na.rm = TRUE)[[1]]) / 1000
@@ -547,4 +529,4 @@ The [World Database on Protected Areas (WDPA)](https://www.protectedplanet.net/)
 - **Carbon is full of speckled holes.** Check the `method` in `project()`: you want to aggregate, not interpolate.
 - **Richness crop returns one cell.** The box was in degrees and the raster is in metres.
 - **`solve()` fails a presolve check.** Does at least one layer have a weight above 0? Is the budget big enough to hold any locked-in cells or country floors? Are there `NA` cells in the features that are not `NA` in the cost?
-- **Network timeouts on the DuckDB pulls.** Use `rast("cache/europe_grid.tif")`.
+- **Network timeouts on the pulls.** Use `rast("cache/europe_grid.tif")`.

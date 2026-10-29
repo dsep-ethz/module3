@@ -6,8 +6,8 @@ The layers, at 10 km (about 58,000 land cells), all on one grid:
 
 - species richness: IUCN Red List combined richness, a local raster in `data/` (World Mollweide), cropped and masked to Europe by the students
 - carbon: irrecoverable carbon 2024 (Conservation International), a COG on Source Cooperative (source.coop/cboettig), window-read with terra from a coarser overview level, no keys needed
-- nature's contributions to people (NCP): the Chaplin-Kramer et al. (2019) layer, H3 hex files on Source Cooperative, pulled with DuckDB (code given, students interrogate it with an AI assistant)
-- population: GHS-POP 2020 (JRC), also H3 hex files, pulled by the students at the end, not used as an objective
+- nature's contributions to people (NCP): the Chaplin-Kramer et al. (2019) layer, a small COG on Source Cooperative read with the same recipe as carbon (code given)
+- population: GHS-POP 2020 (JRC), a global 90 m COG on Source Cooperative that students read at the end from a coarse overview with `method = "sum"` (overview pixels are averages, so the sum has to be scaled back up by 16 x 16), not used as an objective
 
 What I want students to leave with: an optimiser always gives an answer, but the answer depends on layers, budgets, weights and borders that are value judgements, and someone has to make them. The Europe-wide framing makes the last point concrete: the efficient plan loads most of the protected land onto a few countries, and "fair" has several competing meanings.
 
@@ -26,7 +26,7 @@ What I want students to leave with: an optimiser always gives an answer, but the
 
 8:15 Module introduction. 30x30 in Switzerland and the EU, and what it means to hand "where" to an algorithm.
 
-9:00 Methods deep-dive. Load and clip the layers (DuckDB for the hex files, terra for the carbon COG, the same cloud-native moves as Module 1), then what prioritizr does: planning units, features, budget, weights, cost, and why the layers are rescaled to 0-1 before they are summed. Live code up to the four plans. Students should reach the plans by the end of the slot, so tell them to use the backup `cache/europe_grid.tif` if the pulls drag.
+9:00 Methods deep-dive. Load and clip the layers (terra for the carbon and NCP COGs, the same cloud-native moves as Module 1), then what prioritizr does: planning units, features, budget, weights, cost, and why the layers are rescaled to 0-1 before they are summed. Live code up to the four plans. Students should reach the plans by the end of the slot, so tell them to use the backup `cache/europe_grid.tif` if the pulls drag.
 
 ## 29 Oct evening
 
@@ -38,7 +38,7 @@ What I want students to leave with: an optimiser always gives an answer, but the
 
 8:15 Methods deep-dive on adaptive and dynamic decisions, as planned.
 
-9:00 Module project. Pairs do the country exercise and the neutrality reflection, then optional extension A if they have time. In the pooled plan with equal weights, Germany protects 87% of its land and Switzerland 80%, against 37% for France, 14% for Finland and 5% for Spain. Pairs who take on the extension compare the pooled plan with alternatives of their own, measure what fairness costs in benefit, and choose a fairness rule.
+9:00 Module project. Pairs do the country exercise and the neutrality reflection, then optional extension A if they have time. In the pooled plan with equal weights, Germany protects 87% of its land and Switzerland 80%, against 36% for France, 15% for Finland and 5% for Spain. Pairs who take on the extension compare the pooled plan with alternatives of their own, measure what fairness costs in benefit, and choose a fairness rule.
 
 ## 5 Nov evening
 
@@ -60,19 +60,19 @@ The usual format: share the repo, pick one figure and explain how it was made an
 - data/Combined_SR_2025.tif, data/Amphibians_RWR_2025.tif: IUCN Red List species richness rasters, bundled in the repo (no pull needed)
 - cache/europe_grid.tif: richness + carbon + NCP, already pulled onto one masked grid, as a backup if the network is slow in class (population and the country raster are built in the exercises)
 
-Tested end to end on 29 Oct with prioritizr 9.0.1, highs 1.15.1.1, duckdb 2.0.0 and terra 1.9.50. The full render takes about 3 minutes, including the collapsed solutions. Results with equal weights on richness, carbon and NCP, each layer rescaled to 0-1:
+Tested end to end on 29 Oct with prioritizr 9.0.1, highs 1.15.1.1 and terra 1.9.50. The full render takes about 3 minutes, including the collapsed solutions. Results with equal weights on richness, carbon and NCP, each layer rescaled to 0-1:
 
 | Plan | Richness held | Carbon held | NCP held | People inside |
 |---|---|---|---|---|
-| richness | 0.36 | 0.26 | 0.29 | 29% of Europe's population |
-| carbon | 0.29 | 0.73 | 0.35 | 17% |
-| NCP | 0.31 | 0.37 | 0.57 | 45% |
+| richness | 0.36 | 0.26 | 0.28 | 29% of Europe's population |
+| carbon | 0.29 | 0.73 | 0.36 | 17% |
+| NCP | 0.31 | 0.38 | 0.58 | 45% |
 | all three | 0.32 | 0.48 | 0.55 | 39% |
 
-Burden sharing under the all-three plan (my own trial for extension A; the document gives no code for it): the national plan (30% in every country) holds 0.31 of richness, 0.52 of carbon and 0.45 of NCP, against 0.32, 0.48 and 0.55 for the pooled plan, and a 15% floor in every country holds 0.31, 0.50 and 0.53. The pooled plan is not better on every layer, because it maximises the rescaled sum, not each share held. Timings to warn students about: the population pull takes about 20 to 25 seconds, the national plan about 15 seconds, and a floor plan about 30 seconds.
+Burden sharing under the all-three plan (my own trial for extension A; the document gives no code for it): the national plan (30% in every country) holds 0.31 of richness, 0.52 of carbon and 0.46 of NCP, against 0.32, 0.48 and 0.55 for the pooled plan, and a 15% floor in every country holds 0.31, 0.50 and 0.54. The pooled plan is not better on every layer, because it maximises the rescaled sum, not each share held. Timings to warn students about: the population pull takes about 20 to 25 seconds, the national plan about 15 seconds, and a floor plan about 30 seconds.
 
 Rescaling matters: with raw values richness (mean about 247 per cell) swamps carbon (about 14); dividing each layer by its Europe-wide total instead of rescaling to 0-1 makes the all-three plan hold 0.30 of richness, 0.67 of carbon and 0.46 of NCP. Your turn task 6 asks students to compare these.
 
-Choices worth saying out loud in class: Russia is dropped from the polygon but Belarus and Ukraine stay in; the crop removes far-flung territories such as Svalbard; microstates smaller than a 10 km cell vanish; and cells are assigned to countries by their centre. The `wdpar` route for extension B has not been tested, and the Europe-wide H3 partition handling was developed against the current bucket layout.
+Choices worth saying out loud in class: Russia is dropped from the polygon but Belarus and Ukraine stay in; the crop removes far-flung territories such as Svalbard; microstates smaller than a 10 km cell vanish; and cells are assigned to countries by their centre. The `wdpar` route for extension B has not been tested.
 
-The data URLs point at the Source Cooperative bucket on AWS. The NCP and population READMEs list the same files on s3-west.nrp-nautilus.io, which also works if AWS is ever a problem.
+The data URLs are written out in full in the document and point at Source Cooperative's AWS bucket (s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/cboettig/...). On 29 Oct the https://data.source.coop/cboettig/... endpoint for the same files stalled on large reads (about 6 MB in 60 seconds, against 3 seconds for 20 MB from the bucket), so test it before class if you want to switch back. The NCP and population READMEs list the same files on s3-west.nrp-nautilus.io, which also works if AWS is ever a problem.

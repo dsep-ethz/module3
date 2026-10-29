@@ -8,7 +8,7 @@ The main lesson is in [`module3.qmd`](module3.qmd).
 
 By the end of the module, you will be able to:
 
-- load and clip a local raster, a cloud-optimised GeoTIFF, and H3-hexagon tables to a study area on one common grid;
+- load and clip a local raster, and cloud-optimised GeoTIFFs to a study area on one common grid;
 - build a budget-constrained, raster-based conservation planning problem with `prioritizr`;
 - read a spatial optimization's output beyond the map alone (benefit held, people inside, share by country); and
 - explain, concretely, where value judgements enter a planning exercise that "just optimizes."
@@ -36,12 +36,12 @@ Required R packages:
 ```r
 install.packages(c(
   "terra", "sf", "dplyr", "tidyr", "ggplot2",
-  "DBI", "duckdb", "rnaturalearth",
+  "rnaturalearth",
   "prioritizr", "highs"
 ))
 ```
 
-`data/` already contains the IUCN rasters, so no download is needed for the richness layer. You need an internet connection that can reach Source Cooperative's S3 bucket for carbon, NCP, and population, unless you use the cached grid.
+`data/` already contains the IUCN rasters, so no download is needed for the richness layer. You need an internet connection that can reach Source Cooperative's AWS bucket for carbon, NCP, and population, unless you use the cached grid.
 
 ## How to work
 
@@ -59,7 +59,7 @@ A full render runs every network pull and solve, including the collapsed solutio
 
 ## Troubleshooting
 
-- If a network pull times out, rerun once your connection can reach Source Cooperative's S3 bucket, or load `cache/europe_grid.tif`.
+- If a network pull times out, rerun once your connection can reach Source Cooperative's AWS bucket, or load `cache/europe_grid.tif`.
 - If carbon is all `NA` or full of speckled holes, check that you used `project()` (not `resample()`) with an aggregating `method`.
 - If `solve()` refuses with a presolve error, check that at least one layer has a weight above zero and that the budget can hold any locked-in cells.
 - If the cached grid looks stale, delete `cache/europe_grid.tif` and rerun the stacking step.
