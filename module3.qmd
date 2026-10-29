@@ -24,8 +24,8 @@ The EU and Switzerland have both committed to protecting 30% of land by 2030. An
 
 1. Load three global layers and **clip them to Europe** (Switzerland included) (you write this part).
 2. Build four conservation plans, each protecting 30% of the land and maximising a different benefit: species richness, carbon, nature's contributions to people (NCP), or all three together.
-3. Ask who is inside each plan: **how many people** live in the protected land, and **which countries** carry it.
-4. Optionally, explore **burden sharing** between countries, and what is **already protected**.
+3. Ask who is inside each plan: **how many people** live in the protected land, and **which countries** are you solutions in.
+4. Optionally, explore **burden sharing** between countries, and take into account what is **already protected**.
 
 ## Setup
 
@@ -59,7 +59,7 @@ Population (GHS-POP 2020) is a fourth layer you pull yourself at the end. The la
 
 ## 1. A polygon for Europe
 
-We want Europe's countries, with Switzerland as one of them, not a hand-typed box. A few judgement calls are already made here: Russia is dropped (most of it is far outside the layers' useful window), and the crop removes far-flung territories such as Svalbard. Microstates smaller than a 10 km cell may vanish entirely.
+We want Europe's countries, with Switzerland as one of them, not a hand-typed box. A few judgement calls are already made here: Russia is dropped (most of it is far outside the layers' useful window), and the crop removes territories such as Svalbard. We could also clip this to the EU.
 
 ```{r}
 #| label: europe-polygon
@@ -238,31 +238,54 @@ Rescaling does not make the layers equal, and it is a choice, not a neutral step
 
 - It is set by the **extremes**. Carbon's highest cell is about 10 times its average, so most carbon cells end up close to 0 and carbon has less pull than its 0-1 scale suggests.
 - It depends on the **study area**: add or drop a country and the minimum and maximum move, and so does the plan.
-- Other choices exist (divide by the total, z-scores, ranks), and they give different plans. You will compare some in Your turn task 6.
+- Other choices exist (divide by the total, z-scores, ranks), and they give different plans. You can compare these if you are interested!
 :::
 
 ## carbon alone
 
+We set the problem up in `prioritizr` the way you would describe it in words: *choose the cells that hold the most carbon, without protecting more than 30% of the land.* In code that sentence has five parts, and each one is a line (or two) below:
+
+| Part | Question it answers | In the code below |
+|---|---|---|
+| Planning units and cost | What can we choose from, and what does each cell cost? | `problem(uniform_cost, ...)`: every non-`NA` cell is a planning unit |
+| Features | What do we want to protect? | `features = carbon_01` |
+| Objective | What do we maximise, and under what budget? | `add_max_wtd_sum_objective(budget = budget_cells)` |
+| Decisions | Is a cell all in or all out? | `add_binary_decisions()` |
+| Solver | Which engine finds the answer? | `add_default_solver(...)` |
+
 ```{r}
 #| label: plan-carbon
-# Every cell costs the same, so the budget is 30% of the land cells
+# PLANNING UNITS AND COST
+# A raster with a 1 in every land cell and NA elsewhere. prioritizr treats each
+# non-NA cell as a planning unit and its value as the cost of protecting it.
+# Every cell costs the same for now, so "cost" just counts cells.
 uniform_cost <- ifel(is.na(grid[["richness"]]), NA, 1)
 names(uniform_cost) <- "cost"
+
+# BUDGET
+# 30% of the total cost = 30% of the land cells. This is the most we may protect.
 budget_cells <- 0.3 * global(uniform_cost, "sum", na.rm = TRUE)[[1]]
 
-# Rescale carbon to run from 0 (lowest cell) to 1 (highest cell)
+# FEATURE
+# What we want to protect: carbon, rescaled so the lowest cell is 0 and the
+# highest is 1 (see the note above for why).
 carbon_01 <- stretch(grid[["carbon"]], minv = 0, maxv = 1)
 
-p_carbon <- problem(uniform_cost, features = carbon_01) |>
-  add_max_wtd_sum_objective(budget_cells) |>
-  add_binary_decisions() |>
-  add_default_solver(gap = 0, verbose = FALSE)
+# THE PROBLEM (nothing is solved yet; this only describes it)
+p_carbon <- problem(uniform_cost, features = carbon_01) |>      # cells to choose from + what to protect
+  add_max_wtd_sum_objective(budget = budget_cells) |>   # maximise the summed feature value, within the budget
+  add_binary_decisions() |>                             # each cell is protected (1) or not (0), never partly
+  add_default_solver(gap = 0, verbose = FALSE)          # gap = 0: demand the exact best answer, not "within 10%"
 
+# SOLVE
 # force = TRUE: prioritizr flags single-feature problems as a likely mistake, and we want one here
 sol_carbon <- solve(p_carbon, force = TRUE)
 
+# The answer is a raster of 1s (protected) and 0s (not)
 plot(sol_carbon, col = c("grey90", "darkgreen"), main = "Carbon alone, 30% of the land")
 ```
+
+Two things to check. How many cells did it protect (`global(sol_carbon, "sum", na.rm = TRUE)`), and is that 30% of the land cells? Then look at the map: does it match where the carbon layer is high?
 
 ## richness and carbon
 
@@ -270,13 +293,17 @@ Same thing, with a second layer. With two layers and no weights, each counts equ
 
 ```{r}
 #| label: plan-richness-carbon
+# A second feature, rescaled the same way
 richness_01 <- stretch(grid[["richness"]], minv = 0, maxv = 1)
 
+# Only the features change: two layers stacked with c(). Cost, budget, objective,
+# decisions and solver are exactly as before.
 p_richness_carbon <- problem(uniform_cost, features = c(richness_01, carbon_01)) |>
-  add_max_wtd_sum_objective(budget_cells) |>
+  add_max_wtd_sum_objective(budget = budget_cells) |>   # now maximises richness + carbon, each counting equally
   add_binary_decisions() |>
   add_default_solver(gap = 0, verbose = FALSE)
 
+# No force = TRUE needed: there are two features now
 sol_richness_carbon <- solve(p_richness_carbon)
 
 plot(sol_richness_carbon, col = c("grey90", "darkgreen"), main = "Richness and carbon, 30% of the land")
@@ -308,7 +335,7 @@ make_problem <- function(richness = 0, carbon = 0, ncp = 0, population = 0,
   features <- stretch(grid[[names(weights)]], minv = 0, maxv = 1)
 
   p <- problem(cost, features = features) |>
-    add_max_wtd_sum_objective(budget * global(cost, "sum", na.rm = TRUE)[[1]]) |>
+    add_max_wtd_sum_objective(budget = budget * global(cost, "sum", na.rm = TRUE)[[1]]) |>
     add_feature_weights(unname(weights)) |>
     add_binary_decisions() |>
     add_default_solver(gap = 0, verbose = FALSE)
